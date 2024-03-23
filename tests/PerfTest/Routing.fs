@@ -28,6 +28,9 @@ module OxpeckerRouting =
         subRoute "/api" [
             GET [ route "/users" <| text "Users received" ]
             GET [ routef "/user/{%i}/{%s}" <| fun id name -> text $"User {id} {name} received" ]
+            GET [ routefOld "/user/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname  (token: System.Guid) s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx ]
+            GET [ routef "/typeshape/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname (token: System.Guid) s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx ]
+            GET [ routefBaseline "/baseline/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname (token: System.Guid) s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx  ]
             GET [ route "/json" <| json {| Name = "User" |} ]
         ]
     ]
@@ -73,8 +76,8 @@ module GiraffeRouting =
                 "/api"
                 (choose [
                     GET >=> route "/users" >=> text "Users received"
-                    GET
-                    >=> routef "/user/%i/%s" (fun (id, name) next -> text $"User {id} {name} received" next)
+                    GET >=> routef "/user/%i/%s/%s/%O:guid/%s" (fun (id, fstname, lstname, token: System.Guid, s1) next ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" next ctx)
+                    GET >=> routef "/user/%i/%s" (fun (id, name) next -> text $"User {id} {name} received" next)
                     GET >=> route "/json" >=> json {| Name = "User" |}
                 ])
         ]
@@ -102,12 +105,10 @@ type Routing() =
     // | GetOxpeckerRoutef |  9.773 us | 0.1941 us | 0.2157 us | 0.9766 |   8.78 KB |
     // | GetGiraffeRoute   |  9.354 us | 0.1802 us | 0.4963 us | 1.0986 |   9.46 KB |
     // | GetGiraffeRoutef  | 22.890 us | 0.4577 us | 0.8135 us | 1.4648 |  13.46 KB |
-
     let oxpeckerServer = OxpeckerRouting.webApp()
     let giraffeServer = GiraffeRouting.webApp()
     let oxpeckerClient = oxpeckerServer.CreateClient()
     let giraffeClient = giraffeServer.CreateClient()
-
 
     [<Benchmark>]
     member this.GetOxpeckerRoute() = oxpeckerClient.GetAsync("/api/users")
@@ -115,10 +116,20 @@ type Routing() =
     [<Benchmark>]
     member this.GetOxpeckerRoutef() =
         oxpeckerClient.GetAsync("/api/user/1/don")
+    member this.GetOxpeckerRoutefDirect() = oxpeckerClient.GetAsync("/api/baseline/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
 
     [<Benchmark>]
-    member this.GetGiraffeRoute() = giraffeClient.GetAsync("/api/users")
+    member this.GetOxpeckerRoutefNew() = oxpeckerClient.GetAsync("/api/typeshape/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
 
     [<Benchmark>]
     member this.GetGiraffeRoutef() =
         giraffeClient.GetAsync("/api/user/1/don")
+
+    [<Benchmark>]
+    member this.GetOxpeckerRoutefOld() = oxpeckerClient.GetAsync("/api/user/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+
+    [<Benchmark>]
+    member this.GetOxpeckerJson() = oxpeckerClient.GetAsync("/api/json")
+
+    [<Benchmark>]
+    member this.GetGiraffeRoute() = giraffeClient.GetAsync("/api/users")
