@@ -10,6 +10,8 @@ open Microsoft.AspNetCore.Routing
 open Microsoft.AspNetCore.Builder
 open Microsoft.FSharp.Core
 open Oxpecker
+open TypeShape.Core
+open TypeShape.Core.Utils
 
 [<AutoOpen>]
 module RoutingTypes =
@@ -84,6 +86,24 @@ module RouteTemplateBuilder =
         | _ -> ValueNone
 
     let placeholderPattern = Regex("\{%([sibcdfuO])(:[^}]+)?\}")
+
+    let convertToRouteTemplateOld (pathValue: string) =
+        let rec convert (i: int) (chars: char list) =
+            match chars with
+            | '%' :: '%' :: tail ->
+                let template, mappings = convert i tail
+                "%" + template, mappings
+            | '%' :: c :: tail ->
+                let template, mappings = convert (i + 1) tail
+                let placeholderName = $"{c}{i}"
+                placeholderName + template, (placeholderName, c) :: mappings
+            | c :: tail ->
+                let template, mappings = convert i tail
+                c.ToString() + template, mappings
+            | [] -> "", []
+
+        pathValue |> List.ofSeq |> convert 0
+
     // This function should convert to route template and mappings
     // "api/{%s}/{%i}" -> ("api/{x}/{y}", [("x", 's', None); ("y", 'i', None)])
     // "api/{%O:guid}/{%s}" -> ("api/{x:guid}/{y}", [("x", 'O', Some "guid"); ("y", 's', None)])
@@ -219,7 +239,85 @@ module Routers =
     let route (path: string) (handler: EndpointHandler) : Endpoint =
         SimpleEndpoint(HttpVerbs.Any, path, handler, id)
 
+    let getRouteValues (mappings: (string * char) seq) (ctx: HttpContext) =
+        let normalize (s: string) = s.Replace("%2F", "/", StringComparison.OrdinalIgnoreCase) 
+        let routeData = ctx.GetRouteData()
+        let endpoint = ctx.GetEndpoint() :?> RouteEndpoint
+
+        [|
+            for placeholderName, formatChar in mappings do
+
+                if formatChar = 'O' then
+                    let policyReferenceExists, policyReference =
+                        endpoint.RoutePattern.ParameterPolicies.TryGetValue(placeholderName)
+                    if not policyReferenceExists || policyReference[0].Content <> "guid" then
+                        failwith "Only the '%O:guid' format is allowed."
+
+                let res = unbox routeData.Values[placeholderName]
+
+                if formatChar = 's' then
+                    normalize res
+                else
+                    res
+        |]
+
+    let rec mkHandlerApplication<'T, 'R>() : 'T -> string[] -> 'R =
+        match cache.TryFind() with
+        | Some x -> x
+        | None ->
+            let ctx = cache.CreateGenerationContext()
+            mkHandlerApplicationCached<'T, 'R> ctx
+
+    and mkHandlerApplicationCached<'T, 'R> (ctx : TypeGenerationContext) : 'T -> string[] -> 'R =
+        match ctx.InitOrGetCachedValue<'T -> string[] -> 'R> (fun c t -> c.Value t) with
+        | Cached(value = p) -> p
+        | NotCached t ->
+            let p = mkHandlerApplicationAux<'T, 'R> ctx
+            ctx.Commit t p
+
+    and mkHandlerApplicationAux<'T, 'R> (ctx: TypeGenerationContext) : 'T -> string[] -> 'R =
+        if typeof<'T> = typeof<'R> then fun (x: 'T) _ -> unbox<'R> x else
+
+        let wrap (v: string -> string[] -> 'r) = unbox<'T -> string[] -> 'R> v 
+
+        match shapeof<'T>, shapeof<'R> with
+        | Shape.String, Shape.Char   -> wrap (fun s _ -> char s)
+        | Shape.String, Shape.Bool   -> wrap (fun s _ -> bool.Parse s)
+        | Shape.String, Shape.Guid   -> wrap (fun s _ -> Guid s)
+        | Shape.String, Shape.Int32  -> wrap (fun s _ -> int s)
+        | Shape.String, Shape.Int64  -> wrap (fun s _ -> int64 s)
+        | Shape.String, Shape.UInt64 -> wrap (fun s _ -> uint64 s)
+        | Shape.String, Shape.Double -> wrap (fun s _ -> double s)
+        | Shape.FSharpFunc shape, _ ->
+            shape.Accept { new IFSharpFuncVisitor<_> with
+                member _.Visit<'Domain, 'CoDomain>() =
+                    fun handler args ->
+                        let handler = unbox<'Domain -> 'CoDomain> handler
+                        let curr, rest = args[0], args[1..]
+                        let valueParser = mkHandlerApplicationCached<string, 'Domain> ctx
+                        let value = valueParser curr rest
+                        let result = handler value
+                        let next = mkHandlerApplicationCached<'CoDomain, 'R> ctx
+                        next result rest }
+
+        | _ -> failwithf "Unsupported transformation between %A and %A" typeof<'T> typeof<'R>
+
+    and private cache : TypeCache = TypeCache()
+
+    let private applyHandler<'T> =
+        let apply = mkHandlerApplication<'T, HttpContext -> Task>()
+        fun handler mappings ctx ->
+            let values = getRouteValues mappings ctx
+            apply handler values ctx
+
     let routef (path: PrintfFormat<'T, unit, unit, EndpointHandler>) (routeHandler: 'T) : Endpoint =
+        let template, mappings = RouteTemplateBuilder.convertToRouteTemplateOld path.Value
+
+        let requestDelegate = applyHandler<'T> routeHandler mappings
+
+        SimpleEndpoint(HttpVerbs.Any, template, requestDelegate, id)
+
+    let routefOld (path: PrintfFormat<'T, unit, unit, EndpointHandler>) (routeHandler: 'T) : Endpoint =
         let template, _, requestDelegate = routefInner path routeHandler
 
         SimpleEndpoint(HttpVerbs.Any, template, requestDelegate, id)
