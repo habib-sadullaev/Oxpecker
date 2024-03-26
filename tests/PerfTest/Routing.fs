@@ -6,6 +6,81 @@ open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.TestHost
 open Microsoft.Extensions.DependencyInjection
 
+module RoutefImpl =
+    open System
+    open System.Threading.Tasks
+    open FSharp.Reflection
+    open Microsoft.AspNetCore.Http
+    open Microsoft.AspNetCore.Routing
+    open Oxpecker
+
+    let routefTupledDirect (path: PrintfFormat<_, unit, unit, int * string * string * Guid * string -> HttpContext -> Task>) (handler: int * string * string * Guid * string -> HttpContext -> Task) : Endpoint =
+        let template, mappings = RouteTemplateBuilder.convertToRouteTemplateOld path.Value
+
+        let requestDelegate = fun (ctx: HttpContext) ->
+            let routeData = ctx.GetRouteData()
+            handler
+                (int (unbox<string> routeData.Values[fst mappings[0]]),
+                 unbox routeData.Values[fst mappings[1]],
+                 unbox routeData.Values[fst mappings[2]],
+                 Guid (unbox<string> routeData.Values[fst mappings[3]]),
+                 unbox routeData.Values[fst mappings[4]])
+                ctx
+
+        SimpleEndpoint(Any, template, requestDelegate, id)
+
+    let routefCurriedDirect (path: PrintfFormat<int -> string -> string -> Guid -> string -> EndpointHandler, unit, unit, EndpointHandler>) (handler: int -> string -> string -> Guid -> string -> EndpointHandler) : Endpoint =
+        let template, mappings = RouteTemplateBuilder.convertToRouteTemplateOld path.Value
+        
+        let requestDelegate = fun (ctx: HttpContext) ->
+            let routeData = ctx.GetRouteData()
+            handler
+                (int (unbox<string> routeData.Values[fst mappings[0]]))
+                (unbox routeData.Values[fst mappings[1]])
+                (unbox routeData.Values[fst mappings[2]])
+                (Guid (unbox<string> routeData.Values[fst mappings[3]]))
+                (unbox routeData.Values[fst mappings[4]])
+                ctx
+
+        SimpleEndpoint(Any, template, requestDelegate, id)
+
+    let private convertToTuple (mappings : (string * char) list) (ctx: HttpContext) =
+        let routeData = ctx.GetRouteData()
+        let endpoint = ctx.GetEndpoint() :?> RouteEndpoint
+        let values =
+            mappings
+            |> List.map (fun (placeholderName, formatChar) ->
+                let routeValue = routeData.Values.[placeholderName]
+                let modifier =
+                    let gotten, policyReference = endpoint.RoutePattern.ParameterPolicies.TryGetValue(placeholderName) 
+                    if gotten && policyReference[0].Content = "guid" then
+                        Some "guid"
+                    else
+                        None
+                match RouteTemplateBuilder.tryGetParser formatChar modifier with
+                | Some parseFn -> parseFn (routeValue.ToString())
+                | None         -> routeValue)
+            |> List.toArray
+
+        let result =
+            match values.Length with
+            | 1 -> values.[0]
+            | _ ->
+                let types =
+                    values
+                    |> Array.map (fun v -> v.GetType())
+                let tupleType = FSharpType.MakeTupleType types
+                FSharpValue.MakeTuple(values, tupleType)
+        result
+
+    let routefTupledReflection (path : PrintfFormat<_,_,_,_, 'T>) (routeHandler : 'T -> EndpointHandler) : Endpoint =
+
+        let template, mappings = RouteTemplateBuilder.convertToRouteTemplateOld path.Value
+
+        let requestDelegate = fun ctx -> routeHandler (downcast convertToTuple mappings ctx) ctx
+
+        SimpleEndpoint (Any, template, requestDelegate, id)
+
 module OxpeckerRouting =
     open Oxpecker
 
@@ -28,9 +103,11 @@ module OxpeckerRouting =
         subRoute "/api" [
             GET [ route "/users" <| text "Users received" ]
             GET [ routef "/user/{%i}/{%s}" <| fun id name -> text $"User {id} {name} received" ]
-            GET [ routefOld "/user/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname  (token: System.Guid) s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx ]
             GET [ routef "/typeshape/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname (token: System.Guid) s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx ]
-            GET [ routefBaseline "/baseline/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname (token: System.Guid) s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx  ]
+            GET [ routefOld "/user/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname  (token: System.Guid) s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx ]
+            GET [ RoutefImpl.routefTupledReflection "/tupled/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun (id,fstname,lstname,token: System.Guid,s1) ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx  ]
+            GET [ RoutefImpl.routefTupledDirect "/direct/tupled/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun (id,fstname,lstname,token,s1) ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx  ]
+            GET [ RoutefImpl.routefCurriedDirect "/direct/curried/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname token s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx  ]
             GET [ route "/json" <| json {| Name = "User" |} ]
         ]
     ]
@@ -117,20 +194,35 @@ type Routing() =
     [<Benchmark>]
     member this.GetOxpeckerRoutef() =
         oxpeckerClient.GetAsync("/api/user/1/don")
-    member this.GetOxpeckerRoutefDirect() = oxpeckerClient.GetAsync("/api/baseline/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
 
     [<Benchmark>]
-    member this.GetOxpeckerRoutefNew() = oxpeckerClient.GetAsync("/api/typeshape/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+    member this.GetOxpeckerRoutefTupledDirect() =
+        oxpeckerClient.GetAsync("/api/direct/tupled/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
 
+    [<Benchmark(Baseline = true)>]
+    member this.GetOxpeckerRoutefCurriedDirect() =
+        oxpeckerClient.GetAsync("/api/direct/curried/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+    member this.GetOxpeckerRoutefTupledReflection() =
+        oxpeckerClient.GetAsync("/api/tupled/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+
+    [<Benchmark>]
+    member this.GetOxpeckerRoutefCurriedTypeshape() = 
+        oxpeckerClient.GetAsync("/api/typeshape/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+    
     [<Benchmark>]
     member this.GetGiraffeRoutef() =
         giraffeClient.GetAsync("/api/user/1/don")
 
     [<Benchmark>]
-    member this.GetOxpeckerRoutefOld() = oxpeckerClient.GetAsync("/api/user/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+    member this.GetOxpeckerRoutefCurriedReflection() =
+        oxpeckerClient.GetAsync("/api/user/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
 
     [<Benchmark>]
     member this.GetOxpeckerJson() = oxpeckerClient.GetAsync("/api/json")
 
     [<Benchmark>]
     member this.GetGiraffeRoute() = giraffeClient.GetAsync("/api/users")
+
+    [<Benchmark>]
+    member this.GetGiraffeRoutef() =
+        giraffeClient.GetAsync("/api/user/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
