@@ -1,4 +1,4 @@
-﻿namespace PerfTest
+namespace PerfTest
 
 open BenchmarkDotNet.Attributes
 open Microsoft.AspNetCore.Hosting
@@ -8,39 +8,64 @@ open Microsoft.Extensions.DependencyInjection
 
 module RoutefImpl =
     open System
-    open System.Threading.Tasks
     open FSharp.Reflection
     open Microsoft.AspNetCore.Http
     open Microsoft.AspNetCore.Routing
     open Oxpecker
 
-    let routefTupledDirect (path: PrintfFormat<_, unit, unit, int * string * string * Guid * string -> HttpContext -> Task>) (handler: int * string * string * Guid * string -> HttpContext -> Task) : Endpoint =
+    let routefTupledDirect (path : PrintfFormat<_,_,_,_, 'T>) (routeHandler : 'T -> EndpointHandler) : Endpoint =
         let template, mappings = RouteTemplateBuilder.convertToRouteTemplateOld path.Value
 
         let requestDelegate = fun (ctx: HttpContext) ->
             let routeData = ctx.GetRouteData()
-            handler
-                (int (unbox<string> routeData.Values[fst mappings[0]]),
-                 unbox routeData.Values[fst mappings[1]],
-                 unbox routeData.Values[fst mappings[2]],
-                 Guid (unbox<string> routeData.Values[fst mappings[3]]),
-                 unbox routeData.Values[fst mappings[4]])
-                ctx
+            match box routeHandler with
+            | :? (string -> EndpointHandler) as typedHandler ->
+                typedHandler (unbox routeData.Values[fst mappings[0]]) ctx
+
+            | :? (int * string -> EndpointHandler) as typedHandler ->
+                typedHandler
+                    ((int (string routeData.Values[fst mappings[0]])),
+                    (unbox routeData.Values[fst mappings[1]]))
+                    ctx
+
+            | :? (int * string * string * Guid * string -> EndpointHandler) as typedHadler ->
+                typedHadler
+                    (int (string routeData.Values[fst mappings[0]]),
+                     unbox routeData.Values[fst mappings[1]],
+                     unbox routeData.Values[fst mappings[2]],
+                     Guid (string routeData.Values[fst mappings[3]]),
+                     unbox routeData.Values[fst mappings[4]])
+                    ctx
+
+            | _ -> failwithf "Unsupported handler %A" typeof<'T -> Endpoint>
 
         SimpleEndpoint(Any, template, requestDelegate, id)
 
-    let routefCurriedDirect (path: PrintfFormat<int -> string -> string -> Guid -> string -> EndpointHandler, unit, unit, EndpointHandler>) (handler: int -> string -> string -> Guid -> string -> EndpointHandler) : Endpoint =
+    let routefCurriedDirect (path: PrintfFormat<'T, unit, unit, EndpointHandler>) (handler: 'T) : Endpoint =
         let template, mappings = RouteTemplateBuilder.convertToRouteTemplateOld path.Value
         
         let requestDelegate = fun (ctx: HttpContext) ->
             let routeData = ctx.GetRouteData()
-            handler
-                (int (unbox<string> routeData.Values[fst mappings[0]]))
-                (unbox routeData.Values[fst mappings[1]])
-                (unbox routeData.Values[fst mappings[2]])
-                (Guid (unbox<string> routeData.Values[fst mappings[3]]))
-                (unbox routeData.Values[fst mappings[4]])
-                ctx
+            match box handler with
+            | :? (string -> EndpointHandler) as typedHandler ->
+                typedHandler (unbox routeData.Values[fst mappings[0]]) ctx
+
+            | :? (int -> string -> EndpointHandler) as typedHandler ->
+                typedHandler
+                    (int (unbox<string> routeData.Values[fst mappings[0]]))
+                    (unbox<string> routeData.Values[fst mappings[1]])
+                    ctx
+
+            | :? (int -> string -> string -> Guid -> string -> EndpointHandler) as typedHandler ->
+                typedHandler
+                    (int (unbox<string> routeData.Values[fst mappings[0]]))
+                    (unbox routeData.Values[fst mappings[1]])
+                    (unbox routeData.Values[fst mappings[2]])
+                    (Guid (unbox<string> routeData.Values[fst mappings[3]]))
+                    (unbox routeData.Values[fst mappings[4]])
+                    ctx
+
+            | _ -> failwithf "Unsupported handler %A" typeof<'T -> Endpoint>
 
         SimpleEndpoint(Any, template, requestDelegate, id)
 
@@ -58,8 +83,8 @@ module RoutefImpl =
                     else
                         None
                 match RouteTemplateBuilder.tryGetParser formatChar modifier with
-                | Some parseFn -> parseFn (routeValue.ToString())
-                | None         -> routeValue)
+                | ValueSome parseFn -> parseFn (routeValue.ToString())
+                | ValueNone         -> routeValue)
             |> List.toArray
 
         let result =
@@ -102,12 +127,11 @@ module OxpeckerRouting =
         ]
         subRoute "/api" [
             GET [ route "/users" <| text "Users received" ]
-            GET [ routef "/user/{%i}/{%s}" <| fun id name -> text $"User {id} {name} received" ]
-            GET [ routef "/typeshape/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname (token: System.Guid) s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx ]
-            GET [ routefOld "/user/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname  (token: System.Guid) s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx ]
-            GET [ RoutefImpl.routefTupledReflection "/tupled/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun (id,fstname,lstname,token: System.Guid,s1) ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx  ]
-            GET [ RoutefImpl.routefTupledDirect "/direct/tupled/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun (id,fstname,lstname,token,s1) ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx  ]
-            GET [ RoutefImpl.routefCurriedDirect "/direct/curried/{%i}/{%s}/{%s}/{%O:guid}/{%s}" <| fun id fstname lstname token s1 ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" ctx  ]
+            GET [ routefOld "/user/{%i}/{%s}" <| fun id name -> text $"User {id} {name} received" ]
+            GET [ routef "/typeshape/{%i}/{%s}" <| fun id name -> text $"User {id} {name} received" ]
+            GET [ RoutefImpl.routefTupledReflection "/tupled/{%i}/{%s}" <| fun (id, name) ctx -> text $"User {id} {name} received" ctx  ]
+            GET [ RoutefImpl.routefTupledDirect "/direct/tupled/{%i}/{%s}" <| fun (id, name) ctx -> text $"User {id} {name} received" ctx  ]
+            GET [ RoutefImpl.routefCurriedDirect "/direct/curried/{%i}/{%s}" <| fun id name ctx -> text $"User {id} {name} received" ctx  ]
             GET [ route "/json" <| json {| Name = "User" |} ]
         ]
     ]
@@ -150,11 +174,18 @@ module GiraffeRouting =
                     GET >=> route "/json" >=> json {| Name = "User" |}
                 ])
             subRoute
-                "/api"
+                "/api4"
                 (choose [
                     GET >=> route "/users" >=> text "Users received"
                     GET >=> routef "/user/%i/%s/%s/%O:guid/%s" (fun (id, fstname, lstname, token: System.Guid, s1) next ctx -> text $"User {id} {fstname} {lstname} {token} {s1} received" next ctx)
                     GET >=> routef "/user/%i/%s" (fun (id, name) next -> text $"User {id} {name} received" next)
+                    GET >=> route "/json" >=> json {| Name = "User" |}
+                ])
+            subRoute
+                "/api"
+                (choose [
+                    GET >=> route "/users" >=> text "Users received"
+                    GET >=> routef "/user/%i/%s" (fun (id, name) next ctx -> text $"User {id} {name} received" next ctx)
                     GET >=> route "/json" >=> json {| Name = "User" |}
                 ])
         ]
@@ -183,13 +214,15 @@ type Routing() =
     // | GetOxpeckerRoutef | 12.885 us | 0.3035 us | 0.8561 us | 1.0986 |    9.8 KB |
     // | GetGiraffeRoute   |  8.763 us | 0.1748 us | 0.4085 us | 1.0986 |    9.4 KB |
     // | GetGiraffeRoutef  | 25.607 us | 0.4973 us | 0.4885 us | 1.4648 |  13.38 KB |
+
     let oxpeckerServer = OxpeckerRouting.webApp()
     let giraffeServer = GiraffeRouting.webApp()
     let oxpeckerClient = oxpeckerServer.CreateClient()
     let giraffeClient = giraffeServer.CreateClient()
 
     [<Benchmark>]
-    member this.GetOxpeckerRoute() = oxpeckerClient.GetAsync("/api/users")
+    member this.GetOxpeckerRoute() =
+        oxpeckerClient.GetAsync("/api/users")
 
     [<Benchmark>]
     member this.GetOxpeckerRoutef() =
@@ -197,32 +230,20 @@ type Routing() =
 
     [<Benchmark>]
     member this.GetOxpeckerRoutefTupledDirect() =
-        oxpeckerClient.GetAsync("/api/direct/tupled/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+        oxpeckerClient.GetAsync("/api/direct/tupled/1/done")
 
     [<Benchmark(Baseline = true)>]
     member this.GetOxpeckerRoutefCurriedDirect() =
-        oxpeckerClient.GetAsync("/api/direct/curried/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+        oxpeckerClient.GetAsync("/api/direct/curried/1/don")
+
+    [<Benchmark>]
     member this.GetOxpeckerRoutefTupledReflection() =
-        oxpeckerClient.GetAsync("/api/tupled/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+        oxpeckerClient.GetAsync("/api/tupled/1/don")
 
     [<Benchmark>]
     member this.GetOxpeckerRoutefCurriedTypeshape() = 
-        oxpeckerClient.GetAsync("/api/typeshape/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
+        oxpeckerClient.GetAsync("/api/typeshape/1/don")
     
     [<Benchmark>]
     member this.GetGiraffeRoutef() =
         giraffeClient.GetAsync("/api/user/1/don")
-
-    [<Benchmark>]
-    member this.GetOxpeckerRoutefCurriedReflection() =
-        oxpeckerClient.GetAsync("/api/user/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
-
-    [<Benchmark>]
-    member this.GetOxpeckerJson() = oxpeckerClient.GetAsync("/api/json")
-
-    [<Benchmark>]
-    member this.GetGiraffeRoute() = giraffeClient.GetAsync("/api/users")
-
-    [<Benchmark>]
-    member this.GetGiraffeRoutef() =
-        giraffeClient.GetAsync("/api/user/1/john/doe/be4fd44d-fcca-44db-bf85-d392f81532d0/a")
