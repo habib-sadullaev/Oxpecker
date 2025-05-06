@@ -95,15 +95,37 @@ type ModelBinding() =
     // | GiraffeModelBinder  | 123,340.2 ns | 647.92 ns | 574.37 ns | 254.11 |    2.96 | 7.3242 |   62546 B |       93.07 |
 
 
-    static let binder = ModelBinder() :> IModelBinder
+    static let binder_v1 = ModelBinder() :> IModelBinder
+    static let binder_v2 = v2.ModelBinder() :> v2.IModelBinder
     static let formCollection = FormCollection modelData
 
-    [<Benchmark(Baseline = true)>]
-    member _.DirectModelBinder() =
-        parseModel CultureInfo.InvariantCulture formCollection
+    //[<Benchmark(Baseline = true)>]
+    //member _.DirectModelBinder() =
+    //    parseModel CultureInfo.InvariantCulture formCollection
 
     [<Benchmark>]
-    member _.OxpeckerModelBinder() = binder.Bind<Model> formCollection
+    member _.OxpeckerModelBinder_v2_1() = binder_v2.Bind<Model> formCollection
+
+    [<Benchmark(Baseline = true)>]
+    member _.OxpeckerModelBinder_v1_1() = binder_v1.Bind<Model> formCollection
+
+    [<Benchmark>]
+    member _.OxpeckerModelBinder_v2_2() = binder_v2.Bind<Model> formCollection
+
+    [<Benchmark>]
+    member _.OxpeckerModelBinder_v1_2() = binder_v1.Bind<Model> formCollection
+
+    [<Benchmark>]
+    member _.OxpeckerModelBinder_v1_3() = binder_v1.Bind<Model> formCollection
+
+    [<Benchmark>]
+    member _.OxpeckerModelBinder_v2_3() = binder_v2.Bind<Model> formCollection
+
+    [<Benchmark>]
+    member _.OxpeckerModelBinder_v2_4() = binder_v2.Bind<Model> formCollection
+
+    [<Benchmark>]
+    member _.OxpeckerModelBinder_v1_4() = binder_v1.Bind<Model> formCollection
 
     [<Benchmark>]
     member _.GiraffeModelBinder() =

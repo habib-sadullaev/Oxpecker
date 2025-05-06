@@ -11,6 +11,7 @@
         <Compile Include="ViewEngineBuild.fs" />
         <Compile Include="ViewEngineRender.fs" />
         <Compile Include="Routing.fs" />
+        <Compile Include="ModelBinder_v2.fs" />
         <Compile Include="ModelBinding.fs" />
         <Compile Include="Form.fs" />
         <Compile Include="JSON.fs" />
