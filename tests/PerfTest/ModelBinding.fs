@@ -27,6 +27,32 @@ type Model = {
     Children: Child[]
 }
 
+type AnonymousType1 = {|
+Value:
+    {|
+        Value: {| Value: {| Id: int; Name: string |} |}
+    |}
+|}
+
+type AnonymousType2 = {|
+Values:
+    {|
+        Value:
+            {|
+                Values:
+                    {|
+                        Value: {| Id: int; Name: string | null |}
+                    |} array
+            |}
+    |} array
+|}
+
+type ComplexModel = {
+    Model: Model
+    Anon1: AnonymousType1
+    Anon2: AnonymousType2
+}
+
 [<MemoryDiagnoser>]
 type ModelBinding() =
     static let modelData =
@@ -46,6 +72,24 @@ type ModelBinding() =
             "Children[2].Age", StringValues "44"
         ]
         |> List.map KeyValuePair.Create
+        |> Dictionary
+
+    static let modelData1 =
+        [
+            "Value.Value.Value.Name", StringValues "foo"
+            "Value.Value.Value.Id", StringValues "111"
+        ]
+        |> List.map KeyValuePair
+        |> Dictionary
+
+    static let modelData2 =
+        [
+            "Values[2].Value.Values[2].Value.Name", StringValues "foo"
+            "Values[2].Value.Values[0].Value.Id", StringValues "111"
+            "Values[1].Value.Values[0].Value.Name", StringValues "bar"
+            "Values[2].Value.Values[2].Value.Id", StringValues "222"
+        ]
+        |> List.map KeyValuePair
         |> Dictionary
 
     let firstValue (rawValues: StringValues) =
@@ -98,35 +142,53 @@ type ModelBinding() =
     static let binder_v1 = ModelBinder() :> IModelBinder
     static let binder_v2 = v2.ModelBinder() :> v2.IModelBinder
     static let formCollection = FormCollection modelData
+    static let formCollection1 = FormCollection modelData1
+    static let formCollection2 = FormCollection modelData2
 
     //[<Benchmark(Baseline = true)>]
     //member _.DirectModelBinder() =
     //    parseModel CultureInfo.InvariantCulture formCollection
 
     [<Benchmark>]
-    member _.OxpeckerModelBinder_v2_1() = binder_v2.Bind<Model> formCollection
+    member _.OxpeckerModelBinder_v2_1() =
+        [
+            for i in 1..200 ->
+                {
+                    Model = binder_v2.Bind<Model> formCollection
+                    Anon1 = binder_v2.Bind<AnonymousType1> formCollection1
+                    Anon2 = binder_v2.Bind<AnonymousType2> formCollection2
+                }
+        ]
 
     [<Benchmark(Baseline = true)>]
-    member _.OxpeckerModelBinder_v1_1() = binder_v1.Bind<Model> formCollection
+    member _.OxpeckerModelBinder_v1_1() =
+        [
+            for i in 1..200 ->
+            {
+                Model = binder_v1.Bind<Model> formCollection
+                Anon1 = binder_v1.Bind<AnonymousType1> formCollection1
+                Anon2 = binder_v1.Bind<AnonymousType2> formCollection2
+            }
+        ]
 
-    [<Benchmark>]
-    member _.OxpeckerModelBinder_v2_2() = binder_v2.Bind<Model> formCollection
+    //[<Benchmark>]
+    //member _.OxpeckerModelBinder_v2_2() = binder_v2.Bind<Model> formCollection
 
-    [<Benchmark>]
-    member _.OxpeckerModelBinder_v1_2() = binder_v1.Bind<Model> formCollection
+    //[<Benchmark>]
+    //member _.OxpeckerModelBinder_v1_2() = binder_v1.Bind<Model> formCollection
 
-    [<Benchmark>]
-    member _.OxpeckerModelBinder_v1_3() = binder_v1.Bind<Model> formCollection
+    //[<Benchmark>]
+    //member _.OxpeckerModelBinder_v1_3() = binder_v1.Bind<Model> formCollection
 
-    [<Benchmark>]
-    member _.OxpeckerModelBinder_v2_3() = binder_v2.Bind<Model> formCollection
+    //[<Benchmark>]
+    //member _.OxpeckerModelBinder_v2_3() = binder_v2.Bind<Model> formCollection
 
-    [<Benchmark>]
-    member _.OxpeckerModelBinder_v2_4() = binder_v2.Bind<Model> formCollection
+    //[<Benchmark>]
+    //member _.OxpeckerModelBinder_v2_4() = binder_v2.Bind<Model> formCollection
 
-    [<Benchmark>]
-    member _.OxpeckerModelBinder_v1_4() = binder_v1.Bind<Model> formCollection
+    //[<Benchmark>]
+    //member _.OxpeckerModelBinder_v1_4() = binder_v1.Bind<Model> formCollection
 
-    [<Benchmark>]
-    member _.GiraffeModelBinder() =
-        Giraffe.ModelParser.parse<Model> (Some CultureInfo.InvariantCulture) modelData
+    //[<Benchmark>]
+    //member _.GiraffeModelBinder() =
+    //    Giraffe.ModelParser.parse<Model> (Some CultureInfo.InvariantCulture) modelData
