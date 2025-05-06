@@ -163,6 +163,7 @@ type ModelBinding() =
                 Anon1 = binder_v2.Bind<AnonymousType1> formCollection1
                 Anon2 = binder_v2.Bind<AnonymousType2> formCollection2
             }
+        res
 
     [<Benchmark(Baseline = true)>]
     member _.OxpeckerModelBinder_v1_1() =
@@ -172,13 +173,13 @@ type ModelBinding() =
                 Anon1 = binder_v1.Bind<AnonymousType1> formCollection1
                 Anon2 = binder_v1.Bind<AnonymousType2> formCollection2
             }
-
         for i in 1..200 do
             res <- {
                 Model = binder_v1.Bind<Model> formCollection
                 Anon1 = binder_v1.Bind<AnonymousType1> formCollection1
                 Anon2 = binder_v1.Bind<AnonymousType2> formCollection2
             }
+        res
 
     //[<Benchmark>]
     //member _.OxpeckerModelBinder_v2_2() = binder_v2.Bind<Model> formCollection
